@@ -5,6 +5,8 @@
 from dataclasses import dataclass
 import os
 from typing import Any
+from pathlib import Path
+from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
 import json
@@ -75,13 +77,26 @@ class LLMClient:
         self.base_url = os.getenv('BASE_URL')
         self.model_name = os.getenv('MODEL_NAME')
 
+        # 追踪对话记录
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.messages_file = Path("logs") / f"messages-{timestamp}.json"
+
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+
+    # 追踪对话记录
+    def _save_messages(self, messages: list[Message]) -> None:
+        self.messages_file.parent.mkdir(parents=True, exist_ok=True)
+        with self.messages_file.open("w", encoding="utf-8") as f:
+            json.dump(messages, f, ensure_ascii=False, indent=2)
 
     def chat(
         self,
         messages: list[Message],
         tools: list[dict[str, Any]] | None = None,
     ) -> ChatResult:
+        
+        # 追踪对话记录
+        self._save_messages(messages)
         response = self._client.chat.completions.create(
             model=self.model_name,
             messages=messages,

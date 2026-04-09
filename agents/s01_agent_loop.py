@@ -113,7 +113,8 @@ def agent_loop(messages: list):
                 {
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": output,
+                    "tool_name":tool_call.name,
+                    "content": output
                 }
             )
 
@@ -121,10 +122,7 @@ def agent_loop(messages: list):
 if __name__ == "__main__":
     history = []
     while True:
-        try:
-            query = input("\033[36ms01 >> \033[0m")
-        except (EOFError, KeyboardInterrupt):
-            break
+        query = input("\033[36ms01 >> \033[0m")
         if query.strip().lower() in ("q", "exit", ""):
             break
         history.append({"role": "user", "content": query})
