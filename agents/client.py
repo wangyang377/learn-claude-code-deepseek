@@ -72,14 +72,15 @@ class ChatResult:
 
 class LLMClient:
 
-    def __init__(self) -> None:
+    def __init__(self, name: str = "agent") -> None:
         self.api_key = os.getenv('API_KEY')
         self.base_url = os.getenv('BASE_URL')
         self.model_name = os.getenv('MODEL_NAME')
+        self.name = name
 
         # 追踪对话记录
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.messages_file = Path("logs") / f"messages-{timestamp}.json"
+        self.messages_file = Path("logs") / f"{self.name}-messages-{timestamp}.json"
 
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
