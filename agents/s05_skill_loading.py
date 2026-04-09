@@ -11,6 +11,12 @@ Two-layer skill injection that avoids bloating the system prompt:
 Key insight: "Don't put everything in the system prompt. Load on demand."
 """
 
+"""
+有了基础的tools(read file)之后，skill的渐进式披露本身是一个非常好理解的事
+更重要的是学习如何构建system prompt，一个好的system prompt不是一句写死的角色设定，而是逐渐成长、进化的
+新增一个skill，system prompt里的内容会变化，新增一个其他模块（比如memory）是一样的道理，本质上是system prompt的进化
+"""
+
 import json
 import os
 import re
