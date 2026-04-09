@@ -4,3 +4,18 @@
 
 .env
 
+# Python cache / build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Tooling / test caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local logs and runtime files
+logs/
+
+# OS files
+.DS_Store
