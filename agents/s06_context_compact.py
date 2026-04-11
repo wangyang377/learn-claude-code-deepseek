@@ -1,99 +1,43 @@
 #!/usr/bin/env python3
-# Harness: on-demand knowledge -- domain expertise, loaded when the model asks.
+# Harness: compression -- clean memory for infinite sessions.
 """
-s05_skill_loading.py - Skills
+s06_context_compact.py - Compact
 
-Two-layer skill injection that avoids bloating the system prompt:
+Three-layer compression pipeline so the agent can work forever:
 
-    Layer 1 (cheap): skill names in system prompt
-    Layer 2 (on demand): full skill body in tool result
+    Layer 1: micro_compact
+      Replace old non-read_file tool results with placeholders.
 
-Key insight: "Don't put everything in the system prompt. Load on demand."
-"""
+    Layer 2: auto_compact
+      Save transcript, ask LLM for a summary, replace messages with summary.
 
-"""
-有了基础的tools(read file)之后，skill的渐进式披露本身是一个非常好理解的事
-更重要的是学习如何构建system prompt，一个好的system prompt不是一句写死的角色设定，而是逐渐成长、进化的
+    Layer 3: compact tool
+      Let the model trigger immediate summarization.
 """
 
 import json
 import os
-import re
 import subprocess
+import time
 from pathlib import Path
-
-import yaml
+from typing import Any
 
 from client import LLMClient
 
 
 WORKDIR = Path.cwd()
-SKILLS_DIR = WORKDIR / "skills"
-client = LLMClient("s05-agent")
-
-
-class SkillLoader:
-    def __init__(self, skills_dir: Path):
-        self.skills_dir = skills_dir
-        self.skills: dict[str, dict[str, str | dict]] = {}
-        self._load_all()
-
-    def _load_all(self) -> None:
-        if not self.skills_dir.exists():
-            return
-        for skill_file in sorted(self.skills_dir.rglob("SKILL.md")):
-            text = skill_file.read_text()
-            meta, body = self._parse_frontmatter(text)
-            name = meta.get("name", skill_file.parent.name)
-            self.skills[name] = {
-                "meta": meta,
-                "body": body,
-                "path": str(skill_file),
-            }
-
-    def _parse_frontmatter(self, text: str) -> tuple[dict, str]:
-        match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
-        if not match:
-            return {}, text
-        try:
-            meta = yaml.safe_load(match.group(1)) or {}
-        except yaml.YAMLError:
-            meta = {}
-        return meta, match.group(2).strip()
-
-    def get_descriptions(self) -> str:
-        if not self.skills:
-            return "(no skills available)"
-        lines = []
-        for name, skill in self.skills.items():
-            desc = skill["meta"].get("description", "No description")
-            tags = skill["meta"].get("tags", "")
-            line = f"  - {name}: {desc}"
-            if tags:
-                line += f" [{tags}]"
-            lines.append(line)
-        return "\n".join(lines)
-
-    def get_content(self, name: str) -> str:
-        skill = self.skills.get(name)
-        if not skill:
-            return f"Error: Unknown skill '{name}'. Available: {', '.join(self.skills.keys())}"
-        return f"<skill name=\"{name}\">\n{skill['body']}\n</skill>"
-
-
-SKILL_LOADER = SkillLoader(SKILLS_DIR)
-
+client = LLMClient("s06-agent")
 SYSTEM = [
     {
         "role": "system",
-        "content": (
-            f"You are a coding agent at {WORKDIR}.\n"
-            "Use load_skill to access specialized knowledge before tackling unfamiliar topics.\n\n"
-            "Skills available:\n"
-            f"{SKILL_LOADER.get_descriptions()}"
-        ),
+        "content": f"You are a coding agent at {WORKDIR}. Use tools to solve tasks.",
     }
 ]
+
+THRESHOLD = 50000
+TRANSCRIPT_DIR = WORKDIR / ".transcripts"
+KEEP_RECENT = 3
+PRESERVE_RESULT_TOOLS = {"read_file"}
 
 TOOLS = [
     {
@@ -159,21 +103,80 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "load_skill",
-            "description": "Load specialized knowledge by name.",
+            "name": "compact",
+            "description": "Trigger manual conversation compression.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {
+                    "focus": {
                         "type": "string",
-                        "description": "Skill name to load",
+                        "description": "What to preserve in the summary",
                     },
                 },
-                "required": ["name"],
             },
         },
     },
 ]
+
+
+def estimate_tokens(messages: list[dict[str, Any]]) -> int:
+    return len(json.dumps(messages, ensure_ascii=False, default=str)) // 4
+
+
+def micro_compact(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    tool_messages: list[dict[str, Any]] = [
+        msg for msg in messages if msg.get("role") == "tool"
+    ]
+    if len(tool_messages) <= KEEP_RECENT:
+        return messages
+
+    to_clear = tool_messages[:-KEEP_RECENT]
+    for msg in to_clear:
+        content = msg.get("content")
+        tool_name = msg.get("tool_name", "unknown")
+        if not isinstance(content, str) or len(content) <= 100:
+            continue
+        if tool_name in PRESERVE_RESULT_TOOLS:
+            continue
+        msg["content"] = f"[Previous: used {tool_name}]"
+    return messages
+
+
+def auto_compact(messages: list[dict[str, Any]], focus: str | None = None) -> list[dict[str, Any]]:
+    TRANSCRIPT_DIR.mkdir(exist_ok=True)
+    transcript_path = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
+    with transcript_path.open("w", encoding="utf-8") as f:
+        for msg in messages:
+            f.write(json.dumps(msg, ensure_ascii=False, default=str) + "\n")
+    print(f"[transcript saved: {transcript_path}]")
+
+    conversation_text = json.dumps(messages, ensure_ascii=False, default=str)[-80000:]
+    prompt = (
+        "Summarize this conversation for continuity. Include: "
+        "1) What was accomplished, 2) Current state, 3) Key decisions made. "
+        "Be concise but preserve critical details."
+    )
+    if focus:
+        prompt += f" Preserve this especially: {focus}."
+
+    response = client.chat(
+        [
+            {
+                "role": "user",
+                "content": f"{prompt}\n\n{conversation_text}",
+            }
+        ]
+    )
+    summary = response.content or "No summary generated."
+    return [
+        {
+            "role": "user",
+            "content": (
+                f"[Conversation compressed. Transcript: {transcript_path}]\n\n"
+                f"{summary}"
+            ),
+        }
+    ]
 
 
 def safe_path(p: str) -> Path:
@@ -241,12 +244,17 @@ TOOL_HANDLERS = {
     "read_file": lambda **kw: run_read(kw["path"], kw.get("limit")),
     "write_file": lambda **kw: run_write(kw["path"], kw["content"]),
     "edit_file": lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
-    "load_skill": lambda **kw: SKILL_LOADER.get_content(kw["name"]),
+    "compact": lambda **kw: "Manual compression requested.",
 }
 
 
-def agent_loop(messages: list):
+def agent_loop(messages: list[dict[str, Any]]):
     while True:
+        micro_compact(messages)
+        if estimate_tokens(messages) > THRESHOLD:
+            print("[auto_compact triggered]")
+            messages[:] = auto_compact(messages)
+
         response = client.chat(SYSTEM + messages, TOOLS)
         messages.append(response.assistant_message)
 
@@ -255,13 +263,22 @@ def agent_loop(messages: list):
                 print(response.content)
             return
 
+        manual_compact = False
+        compact_focus = None
+
         for tool_call in response.tool_calls:
-            handler = TOOL_HANDLERS.get(tool_call.name)
             args = json.loads(tool_call.arguments)
-            try:
-                output = handler(**args) if handler else f"Unknown tool: {tool_call.name}"
-            except Exception as e:
-                output = f"Error: {e}"
+            if tool_call.name == "compact":
+                manual_compact = True
+                compact_focus = args.get("focus")
+                output = "Compressing..."
+            else:
+                handler = TOOL_HANDLERS.get(tool_call.name)
+                try:
+                    output = handler(**args) if handler else f"Unknown tool: {tool_call.name}"
+                except Exception as e:
+                    output = f"Error: {e}"
+
             print(f"> {tool_call.name}:")
             print(str(output)[:200])
             messages.append(
@@ -273,12 +290,17 @@ def agent_loop(messages: list):
                 }
             )
 
+        if manual_compact:
+            print("[manual compact]")
+            messages[:] = auto_compact(messages, compact_focus)
+            return
+
 
 if __name__ == "__main__":
-    history = []
+    history: list[dict[str, Any]] = []
     while True:
         try:
-            query = input("\033[36ms05 >> \033[0m")
+            query = input("\033[36ms06 >> \033[0m")
         except (EOFError, KeyboardInterrupt):
             break
         if query.strip().lower() in ("q", "exit", ""):
