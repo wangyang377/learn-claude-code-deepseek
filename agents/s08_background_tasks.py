@@ -6,6 +6,22 @@ s08_background_tasks.py - Background Tasks
 Run commands in background threads. A notification queue is drained
 before each LLM call to deliver results.
 
+    Main thread                Background thread
+    +-----------------+        +-----------------+
+    | agent loop      |        | task executes   |
+    | ...             |        | ...             |
+    | [LLM call] <---+------- | enqueue(result) |
+    |  ^drain queue   |        +-----------------+
+    +-----------------+
+
+    Timeline:
+    Agent ----[spawn A]----[spawn B]----[other work]----
+                 |              |
+                 v              v
+              [A runs]      [B runs]        (parallel)
+                 |              |
+                 +-- notification queue --> [results injected]
+
 Key insight: "Fire and forget -- the agent doesn't block while the command runs."
 """
 

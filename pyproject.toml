@@ -6,8 +6,10 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "dotenv>=0.9.9",
+    "fastapi>=0.116.1",
     "openai>=2.31.0",
     "pyyaml>=6.0.2",
+    "uvicorn>=0.35.0",
 ]
 
 [[tool.uv.index]]

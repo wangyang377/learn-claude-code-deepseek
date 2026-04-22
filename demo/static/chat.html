@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Minimal Agent Chat</title>
+    <style>
+      :root {
+        --bg: #f4efe6;
+        --panel: #fffaf2;
+        --line: #d9ccb6;
+        --text: #1f1b16;
+        --muted: #6d6255;
+        --user: #d8ecff;
+        --assistant: #f7dfb5;
+        --accent: #b85c38;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        height: 100vh;
+        font-family: "Iowan Old Style", "Palatino Linotype", serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, #fff7df 0, transparent 35%),
+          radial-gradient(circle at bottom right, #ffd8bf 0, transparent 25%),
+          var(--bg);
+        overflow: hidden;
+      }
+
+      .app {
+        width: 100%;
+        height: 100vh;
+        min-height: 0;
+        background: color-mix(in srgb, var(--panel) 92%, white);
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        overflow: hidden;
+      }
+
+      .header {
+        padding: 20px 22px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .header h1 {
+        margin: 0;
+        font-size: 28px;
+      }
+
+      .header p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+
+      .compare {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .lane {
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        border-right: 1px solid var(--line);
+        overflow: hidden;
+      }
+
+      .lane:last-child {
+        border-right: 0;
+      }
+
+      .lane-head {
+        padding: 14px 18px 10px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.35);
+      }
+
+      .lane-head h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .lane-head p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .messages {
+        padding: 18px;
+        min-height: 0;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .message {
+        max-width: 80%;
+        padding: 12px 14px;
+        border-radius: 16px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+      }
+
+      .message.user {
+        align-self: flex-end;
+        background: var(--user);
+      }
+
+      .message.assistant {
+        align-self: flex-start;
+        background: var(--assistant);
+      }
+
+      .composer {
+        border-top: 1px solid var(--line);
+        padding: 16px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+      }
+
+      textarea {
+        width: 100%;
+        resize: none;
+        min-height: 64px;
+        max-height: 180px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: #fffdf9;
+        font: inherit;
+        color: inherit;
+      }
+
+      button {
+        align-self: end;
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 18px;
+        background: var(--accent);
+        color: white;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: wait;
+      }
+
+      @media (max-width: 640px) {
+        .app {
+          height: 100vh;
+        }
+
+        .compare {
+          grid-template-columns: 1fr;
+        }
+
+        .lane {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .lane:last-child {
+          border-bottom: 0;
+        }
+
+        .message {
+          max-width: 92%;
+        }
+
+        .composer {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <h1>Minimal Agent Chat</h1>
+        <p>One input, two streaming endpoints: sync on the left, async on the right.</p>
+      </header>
+
+      <section class="compare">
+        <section class="lane">
+          <header class="lane-head">
+            <h2>Sync Endpoint</h2>
+            <p>`def` route + sync OpenAI client + semaphore(1)</p>
+          </header>
+          <section id="messages-sync" class="messages"></section>
+        </section>
+
+        <section class="lane">
+          <header class="lane-head">
+            <h2>Async Endpoint</h2>
+            <p>`async def` route + AsyncOpenAI streaming</p>
+          </header>
+          <section id="messages-async" class="messages"></section>
+        </section>
+      </section>
+
+      <form id="chat-form" class="composer">
+        <textarea
+          id="input"
+          placeholder="Ask something, then compare both sides..."
+          required
+        ></textarea>
+        <button id="send" type="submit">Send</button>
+      </form>
+    </main>
+
+    <script>
+      const syncMessagesEl = document.getElementById("messages-sync");
+      const asyncMessagesEl = document.getElementById("messages-async");
+      const formEl = document.getElementById("chat-form");
+      const inputEl = document.getElementById("input");
+      const sendEl = document.getElementById("send");
+
+      const syncHistory = [];
+      const asyncHistory = [];
+
+      function addMessage(container, role, content) {
+        const node = document.createElement("div");
+        node.className = `message ${role}`;
+        node.textContent = content;
+        container.appendChild(node);
+        container.scrollTop = container.scrollHeight;
+        return node;
+      }
+
+      async function streamReply(endpoint, history, container, text) {
+        history.push({ role: "user", content: text });
+        addMessage(container, "user", text);
+        const assistantNode = addMessage(container, "assistant", "");
+        let assistantText = "";
+
+        try {
+          const response = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: history }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          if (!response.body) {
+            throw new Error("Missing response body");
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split("\n\n");
+            buffer = events.pop() || "";
+
+            for (const event of events) {
+              if (!event.startsWith("data: ")) continue;
+              const data = event.slice(6);
+              if (data === "[DONE]") continue;
+
+              const parsed = JSON.parse(data);
+              assistantText += parsed.delta || "";
+              assistantNode.textContent = assistantText;
+              container.scrollTop = container.scrollHeight;
+            }
+          }
+
+          history.push({
+            role: "assistant",
+            content: assistantText || "(empty reply)",
+          });
+          assistantNode.textContent = assistantText || "(empty reply)";
+        } catch (error) {
+          assistantNode.textContent = `Request failed: ${error.message}`;
+        } finally {
+          container.scrollTop = container.scrollHeight;
+        }
+      }
+
+      formEl.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const text = inputEl.value.trim();
+        if (!text) return;
+
+        sendEl.disabled = true;
+        inputEl.value = "";
+        try {
+          await Promise.all([
+            streamReply("/api/chat", syncHistory, syncMessagesEl, text),
+            streamReply("/api/chat-async", asyncHistory, asyncMessagesEl, text),
+          ]);
+        } finally {
+          sendEl.disabled = false;
+          inputEl.focus();
+        }
+      });
+    </script>
+  </body>
+</html>
